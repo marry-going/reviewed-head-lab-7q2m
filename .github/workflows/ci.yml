@@ -1,0 +1,74 @@
+name: CI
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  detect-scopes:
+    runs-on: ubuntu-latest
+    outputs:
+      security: ${{ fromJSON(steps.scopes.outputs.scopes).security }}
+      docs: ${{ fromJSON(steps.scopes.outputs.scopes).docs }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Show event repository identity
+        run: |
+          echo "head_repo_id=${{ github.event.pull_request.head.repo.id }}"
+          echo "base_repo_id=${{ github.event.pull_request.base.repo.id }}"
+          echo "head_sha=${{ github.event.pull_request.head.sha }}"
+
+      - name: Detect scopes
+        id: scopes
+        uses: Mergifyio/gha-mergify-ci@392d123d84a27960993927aec1f2cbb059fb95c1
+        with:
+          action: scopes
+          mergify_cli_version: latest
+
+  security-tests:
+    needs: detect-scopes
+    if: needs.detect-scopes.outputs.security == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Security canary
+        run: |
+          value="$(cat security/canary.txt)"
+          echo "canary=${value}"
+          if [ "${value}" = "BYPASS-CANARY" ]; then
+            echo "security canary failure"
+            exit 1
+          fi
+
+  docs-tests:
+    needs: detect-scopes
+    if: needs.detect-scopes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "docs ok"
+
+  ci-gate:
+    if: ${{ !cancelled() }}
+    needs:
+      - detect-scopes
+      - security-tests
+      - docs-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report status
+        uses: Mergifyio/gha-mergify-ci@392d123d84a27960993927aec1f2cbb059fb95c1
+        with:
+          action: wait-jobs
+          jobs: ${{ toJSON(needs) }}
